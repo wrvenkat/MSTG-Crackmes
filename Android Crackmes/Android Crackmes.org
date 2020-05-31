@@ -12,7 +12,7 @@
 - If the both above check pass then the view is created.
 ***** String Veification
 - The ~verify(View)~ method gets the String from the TextBox and passes it to ~sg.vantagepoint.uncrackable1.a~ class's ~boolean a(String)~ method.\\
-  This method then calls ~sg.vantagepoint.a.a~ class's ~a(byte[], byte[])~ method. This method calls that method with 2 hardcoded values, the first one is encoded in some format which is decoded by a call to method ~byte[] b(String)~.\\
+  This method then calls ~sg.vantagepoint.a.a~ class's ~a(byte[], byte[])~ method. This method calls that method with 2 hardcoded values, the first one is encoded in some format which is decoded by a call to method ~byte[] b(String)~.
 - The ~sg.vantagepoint.a.a~ class's ~byte[] a(byte[] key, byte[] value)~ method if you look at it, encrypts ~value~ with ~key~ which makes sense since the ~key~ value is the one that's "obfuscated". The encryption appears to be AES/ECB/PKCS7Padding.
 - Finally, the value returned by this method as a String is compared against the entered value and if they're equal, the ~boolean a(String)~ method of class ~sg.vantagepoint.uncrackable1.a~ return true which leads to "Success" message.
 *** Solution
