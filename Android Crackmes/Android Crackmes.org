@@ -1,0 +1,21 @@
+* Android OWASP Crackme
+- A list of crackeme exercises are avialble at [[https://github.com/OWASP/owasp-mstg/tree/master/Crackmes][OWASP MSTG Crackme]].
+** Level 1
+- *Goal*: Bypass the root and debug detection and input the secret string to solve this level.
+*** Analysis
+**** Runtime
+- On installing and running the app, the app throws a "Root Detected! This is unacceptable. The app is going to exit" message.
+*** Decompilation
+***** Root and Debug Check
+- On decompiling and looking at the app, one can find in ~onCreate()~ method of the ~g.vantagepoint.uncrackable1.MainActivity~ class that ~sg.vantagepoint.a.c~ class's all three root-detection methods are called.
+- Immediately afterwards, ~sg.vantagepoint.a.b~ class's ~a()~ method is called for ~debug~ flag check.
+- If the both above check pass then the view is created.
+***** String Veification
+- The ~verify(View)~ method gets the String from the TextBox and passes it to ~sg.vantagepoint.uncrackable1.a~ class's ~boolean a(String)~ method.\\
+  This method then calls ~sg.vantagepoint.a.a~ class's ~a(byte[], byte[])~ method. This method calls that method with 2 hardcoded values, the first one is encoded in some format which is decoded by a call to method ~byte[] b(String)~.\\
+- The ~sg.vantagepoint.a.a~ class's ~byte[] a(byte[] key, byte[] value)~ method if you look at it, encrypts ~value~ with ~key~ which makes sense since the ~key~ value is the one that's "obfuscated". The encryption appears to be AES/ECB/PKCS7Padding.
+- Finally, the value returned by this method as a String is compared against the entered value and if they're equal, the ~boolean a(String)~ method of class ~sg.vantagepoint.uncrackable1.a~ return true which leads to "Success" message.
+*** Solution
+- The solution involves ~Frida~ to bypass the [[Root and Debug Check]] and some code in Python or Java to replicate the decode and encrypt process in [[String Verification]].
+- Frida Code: ~level1-root_debug_bypass.js~ and decode and encrypt: ~DecodeAndEncrypt.java~.
+** Level 2 
