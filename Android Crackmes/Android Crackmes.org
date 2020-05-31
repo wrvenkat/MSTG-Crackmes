@@ -6,8 +6,8 @@
 **** Runtime
 - On installing and running the app, the app throws a "Root Detected! This is unacceptable. The app is going to exit" message.
 *** Decompilation
-***** Root and Debug Check
-- On decompiling and looking at the app, one can find in ~onCreate()~ method of the ~g.vantagepoint.uncrackable1.MainActivity~ class that ~sg.vantagepoint.a.c~ class's all three root-detection methods are called.
+***** Root and Debug Flag Check
+- On decompiling and looking at the app, one can find in ~onCreate()~ method of the ~sg.vantagepoint.uncrackable1.MainActivity~ class that ~sg.vantagepoint.a.c~ class's all three root-detection methods are called.
 - Immediately afterwards, ~sg.vantagepoint.a.b~ class's ~a()~ method is called for ~debug~ flag check.
 - If the both above check pass then the view is created.
 ***** String Veification
@@ -16,6 +16,101 @@
 - The ~sg.vantagepoint.a.a~ class's ~byte[] a(byte[] key, byte[] value)~ method if you look at it, encrypts ~value~ with ~key~ which makes sense since the ~key~ value is the one that's "obfuscated". The encryption appears to be AES/ECB/PKCS7Padding.
 - Finally, the value returned by this method as a String is compared against the entered value and if they're equal, the ~boolean a(String)~ method of class ~sg.vantagepoint.uncrackable1.a~ return true which leads to "Success" message.
 *** Solution
-- The solution involves ~Frida~ to bypass the [[Root and Debug Check]] and some code in Python or Java to replicate the decode and encrypt process in [[String Verification]].
+- The solution involves ~Frida~ to bypass the [[Root and Debug Flag Check]] and some code in Python or Java to replicate the decode and encrypt process in [[String Verification]].
 - Frida Code: ~level1-root_debug_bypass.js~ and decode and encrypt: ~DecodeAndEncrypt.java~.
 ** Level 2 
+- *Goal*: Bypass root, debug and /debugger check/ and input the secret string to solve this level.
+*** Analysis
+**** Runtime
+- On installing and running the app, the app throws a "Root Detected! This is unacceptable. The app is going to exit" message.
+**** Decompilation
+**** Root and debug check
+- On decompilation of the DEX code, one can find that the logic for [[Root and Debug Flag Check]] are the exact same as that of Level 1 but the difference lie in the class naming.\\
+  The class that contains the root check methods is called ~sg.vantagepoint.a.b~ with the exact same three methods for root check.\\
+  The class that contains the debug flag method is called ~sg.vantagepoint.a.a~ with the same method name.
+- These above methods get called in ~onCreate()~ of ~sg.vantagepoint.uncrackable2.MainActivity~.
+**** Debugging check
+- An additional check that is present in this level is the use of ~Debug.isDebuggerConnected()~ to check for debugger in an ~AsyncTask~ context.
+- Within this ~AsyncTask~ context, once ~onPostExecute()~ is triggered, the code inside ~onPostExecute()~ triggers the method ~a()~ of ~sg.vantagepoint.uncrackable2.MainActivity~ which triggers the ~AlertDialog~ and exits the app.
+**** String Verification
+- Once the above checks all pass, the success condition inside the ~verify(View)~ method is triggered by the statement ~m.a(obj)~. In this, ~m~ is a member variable of ~MainActivity~ that's initialized inside ~onCreate()~ to an instance of ~sg.vantagepoint.uncrackable2.CodeCheck~ and ~a(String)~ being a method of ~CodeCheck~ class.
+- The ~a(String)~ method returns the value of method calling ~native~ method ~b()~ with ~b(str.getBytes()~.
+***** JNI Use
+- This level makes use of JNI functions to hide some verification logic.
+- There are 2 native methods in use by the app,
+  + ~init()~ called inside ~MainActivity~'s ~onCreate()~
+  + ~b(byte[])~ called by ~CodeCheck~'s ~a(String)~ method.
+- ~MainActivity~'s static initializer is responsible for loading the native library named ~foo~ using the dynamically resolved loading method ~System.load()~.
+- The app makes use of dynamic linking to resolve the called methods.
+****** libfoo
+- The native method counterparts are,
+  + ~init()~ maps to ~Java_sg_vantagepoint_uncrackable2_MainActivity_init()~
+  + ~b()~ maps to ~Java_sg_vantagepoint_uncrackable2_CodeCheck_bar()~
+- ~Java_sg_vantagepoint_uncrackable2_MainActivity_init()~
+  #+BEGIN_EXAMPLE -n C
+  DAT_00014008 = fork();
+  if (DAT_00014008 == 0) {
+    __pid = getppid();
+    lVar1 = ptrace(PTRACE_ATTACH,__pid,0,0);
+    if (lVar1 == 0) {
+      waitpid(__pid,(int *)&local_20,0);
+      while( true ) {
+        ptrace(PTRACE_CONT,__pid,0,0);
+        _Var2 = waitpid(__pid,(int *)&local_20,0);
+        if (_Var2 == 0) break;
+        if ((local_20 & 0x7f) != 0x7f) {
+                    /* WARNING: Subroutine does not return */
+          _exit(0);
+        }
+      }
+    }
+  }
+  else {
+    pthread_create(&pStack36,(pthread_attr_t *)0x0,(__start_routine *)&LAB_00010914+1,(void *)0x0);
+  }
+  #+END_EXAMPLE
+  - The code for ~init()~ performs the following
+    + ~fork()~ a process,
+    + In the child process (~DAT_00014008 == 0~), gets the process id of the child using ~getpid()~.
+    + Performs a ~ptrace()~ on the ~pid~ , i.e attach ~ptrace~ on itself which when if it returns 0, we await a return using ~waitpid()~ which is used to wait for state change in a tracee.\\
+      When ~waitpid~ returns, this means we've successfully started tracing the ~pid~. So, then what we do is, within the ~while(true)~ loop, we continuously trace the same ~pid~ using a ~ptrace()~, ~waitpid()~ stacked call.\\
+      When ~Var2~ equals 0, it means that the child didnt' change state (see ~man waitpid~ and [[https://stackoverflow.com/questions/21484410/waitpid-returns-pid-0-and-wifexited-1-how-to-get-pid][waitpid returns 0]]), then we break out of the ~while~ loop.\\
+      If not, this means the ~status~ or ~wstatus~ to ~waitpid~ has changed which means we can examine the status code in variable ~local_20~. This, when examined if when a bitwise & with hex equivalent of 127 is not equal to 127, then we ~exit(0)~.\\
+      \\
+      This 127 value and the expression ~(local_20 & 0x7f)~ is a macro which is equivalent to ~define WTERMSIG(x) ((x) & 0x7f)~ from [[https://android.googlesource.com/platform/external/bison/+/05436638acc7c010349a69c3395f1a57c642dc62/lib/sys_wait.in.h][sys_wait.in.h]]. Essentially, this means that if the child has been terminated, then we can exit child using ~_exit(0)~. See [[https://man7.org/linux/man-pages/man2/_exit.2.html][_exit()]] and more importantly [[https://stackoverflow.com/questions/5422831/what-is-the-difference-between-using-exit-exit-in-a-conventional-linux-fo][_exit on child process]].
+  - If the code is not in a child process, i.e ~(DAT_00014008 != 0)~, then we spawn a thread using ~pthread_create()~ on the routine at location ~&LAB_00010914+1~.//
+    This code at ~&LAB_00010914+1~ is another function which does ~waitpid~ on the same return value from the initial ~fork()~ call, and ~pthread_exit()~ with the below code.
+    #+BEGIN_EXAMPLE -n C
+    int local_c;
+    waitpid(DAT_00014008,(int *)&stack0xfffffff4,0);
+     
+    if (local_c == 0xb) {
+         /* WARNING: Subroutine does not return */
+	 pthread_exit((void *)0x0);
+    }
+    /* WARNING: Subroutine does not return */
+    _exit(0);
+    #+END_EXAMPLE
+- ~Java_sg_vantagepoint_uncrackable2_CodeCheck_bar()~
+  + This function uses the JNI functions ~GetByteArrayElements~ and ~GetArrayLength~ to get the elements and the length.
+  + Then perform an ~strncmp~ for size 0x17 i.e 23 bytes against the static byte values inside the native ~init()~.\\
+    It is important to note that the integer variables which are indicated in the decompiled code below are all little endian meaning the LSB is stored first or appears first. See [[https://en.wikipedia.org/wiki/Endianness][endianness]].
+    #+BEGIN_EXAMPLE -n C
+    local_34 = 0x6e616854;
+    local_30 = 0x6620736b;
+    local_2c = 0x6120726f;
+    local_28 = 0x74206c6c;
+    local_24 = 0x6568;
+    local_22 = 0x73696620;
+    local_1e = 0x68;
+    __s1 = (*(*param_1)->GetByteArrayElements)((JNIEnv *)param_1,param_3,(jboolean *)0x0);
+    jVar1 = (*(*param_1)->GetArrayLength)((JNIEnv *)param_1,(jarray)param_3);
+    if ((jVar1 == 0x17) && (iVar2 = strncmp(__s1,(char *)&local_34,0x17), iVar2 == 0)) {
+      uVar3 = 1;
+    ...
+    #+END_EXAMPLE
+  + Decoding the above value properly provides the solution ~Thanks for all the fish~.
+*** Solution
+- The root and debug flag check can be bypassed in the regular known way using Frida - ~level2-root_debug_bypass.js~
+- The solution that decodes the LE to BE string is in ~bytes_to_str.py~.
+- The ~StrToBytes.java~ contains sample code to show how to convert ~String~ to ~byte~ in Java.
