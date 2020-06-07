@@ -5,7 +5,7 @@
 *** Analysis
 **** Runtime
 - On installing and running the app, the app throws a "Root Detected! This is unacceptable. The app is going to exit" message.
-*** Decompilation
+**** Decompilation
 ***** Root and Debug Flag Check
 - On decompiling and looking at the app, one can find in ~onCreate()~ method of the ~sg.vantagepoint.uncrackable1.MainActivity~ class that ~sg.vantagepoint.a.c~ class's all three root-detection methods are called.
 - Immediately afterwards, ~sg.vantagepoint.a.b~ class's ~a()~ method is called for ~debug~ flag check.
@@ -114,3 +114,60 @@
 - The root and debug flag check can be bypassed in the regular known way using Frida - ~level2-root_debug_bypass.js~
 - The solution that decodes the LE to BE string is in ~bytes_to_str.py~.
 - The ~StrToBytes.java~ contains sample code to show how to convert ~String~ to ~byte~ in Java.
+** Level 3
+- The crackme from hell!
+- *Goal* - A secret string is hidden somewhere in this app. Find a way to extract it.
+*** Analysis
+**** Runtime
+- On installing and running on a rooted device, the app throws a "Rooting or tampering detected. This is unacceptable. The app is now going to exit." message.
+***** Crash Dump
+- It should be noted that when spawning the app with frida, the app crashes and the crash dump offers the following backtrace,
+  #+BEGIN_EXAMPLE
+  backtrace:
+    #00 pc 0000000000000384  /system/lib64/libc.so (offset 0x6d000)
+    #01 pc 000000000000308c  /data/app/owasp.mstg.uncrackable3-l7S9fJCPcVQclNyLgavEAg==/lib/arm64/libfoo.so (goodbye()+12)
+    #02 pc 00000000000031ac  /data/app/owasp.mstg.uncrackable3-l7S9fJCPcVQclNyLgavEAg==/lib/arm64/libfoo.so
+    #03 pc 0000000000040c94  /system/lib64/libc.so (offset 0x29000)
+  #+END_EXAMPLE
+**** Decompilation
+***** Root and Debug Flag Check 
+- The root and debug flag check appear to be exactly the same as in the previous crackmes.
+***** Additional Checks
+- In addition to the existing root and debug flag check, one can find that inside ~onCreate()~, we can find calls to ~verifyLibs()~ and ~init(xorkey.getBytes())~.
+- ~verifyLibs()~
+  + This method appears to check the CRC value of the packaged native libs and the ~classes.dex~ file against hardcoded values.
+  + If the calculated CRC value doesn't match against the one hardcoded, then a ~tampered~ variable flag is set.
+  + This ~tampered~ value is checked in the root and debug flag check steps.
+- ~init(xorkey.getBytes())~
+  + The ~init()~ method is a native method which accepts a byte array. The details of this will be discussed in the native section.
+***** Native Libs
+- From the analysis of the APK's decompilation, we can find that there are 3 native functions that are referred to in Java - ~init(bytes)~, ~void baz()~ and ~bar(bytes)~ from ~libfoo.so~.
+- ~init(bytes)~
+  + This function accepts a byte array which on the native side, is copied to a global variable.
+  + This would appear to be one part of the 'key' in XORing.
+- ~baz()~
+  + This function merely returns the CRC value of ~classes.dex~ which is used in the ~verifyLibs()~ call.
+- ~bar(bytes)~
+  + This function accepts a byte array and is used to check the user provided value to solve this crack me.
+  + The provided byte array is looped through and each byte is checked against the XOR'd value provided to ~init(bytes)~ and the value returned from a special function @ offset 0x10e0 which shows up as ~FUN_001010e0~ in Ghidra.
+  + If the values match, the function returns true by returning 1. 0 or false otherwise.
+- ~FUN_001010e0(pointer)~
+  + This function is used by ~bar(bytes)~ to get a special value that is used to XOR against a key received from Java side.
+  + Towards the end of the function, this hardcoded value is populated to the provided pointer and returned.
+***** Runtime Frida detection
+- While the root and debug check and the user provided input verification logic seem to make sense, attaching fridato bypass some of the protections proved as a challenge initially.
+- The issue here is that this check starts heppening as ~libfoo.so~ is being loaded. The sections ~.INIT_ARRAY~ and ~.FINI_ARRAY~ in an ELF binary point to functions that will be run, in order by ~dlopen()~ and ~dlclose()~.
+  + The function pointed to by the entry in ~.INIT_ARRAY~ creates a ~pthread~ on the function ~FUN_001030d0()~. See [[https://wiki.osdev.org/Calling_Global_Constructors][here]], [[https://github.com/lattera/glibc/blob/a2f34833b1042d5d8eeb263b4cf4caaea138c4ad/elf/dl-init.c#L73-L86][here]], [[https://github.com/lief-project/LIEF/issues/118][here]], [[https://www.gamedev.net/forums/topic/213849-linux-so-files-entry-point/][here]] and [[http://dandylife.net/blog/archives/686][here]].
+  + The function ~FUN_001030d0()~ does the following to detect if frida or xposed are present as part of the process's memory.
+    - Opens and reads ~/self/proc/maps~. Triggers termination through the ~goodbye()~ function if ~/self/proc/maps~ cannot be read.
+    - It then loops through the read content looking for the presense of strings ~xposed~ and ~frida~ continuously reading from ~/self/proc/maps~ and checking for ~frida~ or ~xposed~ presence terminating only if either of them are found. If any such strings are found, termination is again by calling ~goodbye()~.
+    - The ~goodbye()~ function calls ~raise(6)~ which corresponds to the signal ~SIGABRT~ causing termination.
+    - This makes sense corresponding to the [[Crash Dump]] backtrace received for app termination which shows what triggered the termination/crash.
+- The issue here is that, we can't hook onto these non-exported functions in the lib unless we know their actual addresses and keep frida hooked throughout the process.
+- Unforunately, due to the native lib constantly checking for frida's presence, we cannot proceed much further about hooking the necessary locations to get what we need.
+*** Solution
+- Fortunately for us, the librray's frida check depends on external functions from libs that are already loaded. So, to trick the lib's function into thinking that frida's not present, we've more thatn one way of doing this. In the solution, it is done by hooking ~strstr()~ and always returning ~NULL~ so that, that particular thread keeps checkin for the presence and does nothing else.
+- Once, this is done, we can conveniently hook at all other internal functions by providing their absolute address calculating them by adding their offsets to the module's base address.
+- Once this is done, we can hook and read the special value populated by function ~FUN_001010e0~.
+- Solution is present in ~level3-loadLibraryHook.js~ file.
+
